@@ -10,8 +10,14 @@ by changing the method names appropriately. In particular, another import must b
     from Thorlabs.MotionControl.GenericMotorCLI import KCubeMotor
 """
 
+
 import time
 import clr # need to import pythonnet (can be done from pip)
+from matplotlib import pyplot as plt
+import datetime as dt
+import asyncio
+import signal
+
 
 # to access dll namespaces from Thorlabs, we need to first add the references
 clr.AddReference("C:\\Program Files\\Thorlabs\\Kinesis\\Thorlabs.MotionControl.DeviceManagerCLI.dll")
@@ -25,8 +31,18 @@ from Thorlabs.MotionControl.GenericMotorCLI.ControlParameters import JogParamete
 from Thorlabs.MotionControl.TCube.DCServoCLI import *
 from System import Decimal # Kinesis libraries use Decimal type for move parameters and stage settings
 
-def main():
-    
+user_position = float(input("Please specify position in mm: "))
+animation_active = True
+
+async def display_coroutine(controller: TCubeDCServo, refresh_rate: float, xs: list, ys: list):
+    await asyncio.sleep(refresh_rate)
+
+    pos = controller.Position.ToString()
+    xs.append(dt.datetime.now().strftime('%H:%M:%S.%f'))
+    ys.append(pos)
+
+
+async def main():    
     serial_num = str('83835052') # use S/N of T Cube controller
     
     DeviceManagerCLI.BuildDeviceList() # load available devices into memory
@@ -48,8 +64,8 @@ def main():
         config.DeviceSettingsName = str('MTS50-Z8') # use part number of this stage
         config.UpdateCurrentConfiguration()
         controller.SetSettings(controller.MotorDeviceSettings, True, False)
+        info = controller.GetDeviceInfo()
         
-    	info = controller.GetDeviceInfo()
         print(f"Controller {serial_num} = {info.Name}")
 
         print('Homing Motor')
@@ -58,17 +74,36 @@ def main():
         # to change the jog params of the translation stage, first import them with the GetJogParams method and then modify
         jog_params = controller.GetJogParams()
         jog_params.StepSize = Decimal(1) # units in mm
-        jog_params.MaxVelocity = Decimal(1) # units in mm/s
+        jog_params.MaxVelocity = Decimal(2) # units in mm/s
         jog_params.JogMode = JogParametersBase.JogModes.SingleStep
         
         # send updated jog params back to the controller
         controller.SetJogParams(jog_params)
         
         print('Moving Motor')
-        controller.MoveJog(MotorDirection.Forward, 60000) # move one step forwards, abort if this takes longer than specified time in ms
+        controller.MoveTo(Decimal(user_position), 0) # immediately continue
+        time.sleep(.25)
+
+        fig, ax = plt.subplots()
+        xs = []
+        ys = []
+        plt.ion()
+
+        try:
+            while True:
+                await asyncio.gather(display_coroutine(controller, .25, xs, ys))
+                ln, = ax.plot(xs, ys)
+                ax.set_xlabel("Time")
+                ax.set_ylabel("Position (mm)")
+                plt.xticks(rotation=45, ha="right")
+                plt.show()
+        except KeyboardInterrupt:
+            controller.StopPolling()
+            controller.Disconnect(False)
+            print("Disconnected")
+            
         
-        controller.StopPolling()
-        controller.Disconnect(False) 
-    
-if __name__ == "__main__":
-    main()
+        # want the controller to move first to user specified position and then 
+        # depending on the input of the zurich to move towards or away from the assumed position.
+
+asyncio.run(main())
