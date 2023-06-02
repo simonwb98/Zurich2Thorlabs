@@ -10,13 +10,19 @@ by changing the method names appropriately. In particular, another import must b
     from Thorlabs.MotionControl.GenericMotorCLI import KCubeMotor
 """
 
-
+# imports for Thorlabs
 import time
 import clr # need to import pythonnet (can be done from pip)
-from matplotlib import pyplot as plt
+
+# imports for live plotting and asynchronous programming
+import numpy as np
 import datetime as dt
 import asyncio
 import signal
+from PyQt5 import QtWidgets, QtCore
+import pyqtgraph as pg
+import sys
+import os
 
 
 # to access dll namespaces from Thorlabs, we need to first add the references
@@ -34,12 +40,20 @@ from System import Decimal # Kinesis libraries use Decimal type for move paramet
 user_position = float(input("Please specify position in mm: "))
 animation_active = True
 
-async def display_coroutine(controller: TCubeDCServo, refresh_rate: float, xs: list, ys: list):
-    await asyncio.sleep(refresh_rate)
+async def display_coroutine(controller: TCubeDCServo, sampling_rate: float, xs: list, ys: list):
+
+    
+    await asyncio.sleep(sampling_rate)
 
     pos = controller.Position.ToString()
-    xs.append(dt.datetime.now().strftime('%H:%M:%S.%f'))
-    ys.append(pos)
+    np.append(xs, xs[-1] + sampling_rate)
+    xs = xs[1:] # pop off first element
+    np.append(ys, pos)
+    ys = ys[1:]
+    print(xs)
+    plot.setData(xs, ys)
+    app.exec_()
+    
 
 def handle_interrupt(signum, frame):
     print("Program interrupted. Disconnecting from controller ...")
@@ -93,21 +107,33 @@ async def main():
         print('Moving Motor')
         controller.MoveTo(Decimal(user_position), 0) # immediately continue
         time.sleep(.25)
-        print("Press Ctrl+c to interrupt")
+        print("Press \"Ctrl+c\" to interrupt")
 
-        fig, ax = plt.subplots()
-        xs = []
-        ys = []
-        plt.ion()
+        # initialize plot
+
+        app = QtWidgets.QApplication(sys.argv)
+
+        show_last = 100 #int, number of data points
+        sampling_rate = .25 #float, rate in s
+        xs = np.linspace(-show_last*sampling_rate, 0, show_last, endpoint=True)
+        ys = np.zeros(show_last)
+
+        win = pg.GraphicsLayoutWidget()
+        win.show()
+
+        plot_item = pg.PlotItem()
+        pen = pg.mkPen(color=(255, 0, 0))
+        plot = plot_item.plot(pen=pen)
+        win.addItem(plot_item)
+        plot.setData(xs, ys)
+        
+
+        # update plot
 
         try:
             while not interrupted:
-                await asyncio.gather(display_coroutine(controller, .25, xs, ys))
-                ln, = ax.plot(xs, ys)
-                ax.set_xlabel("Time")
-                ax.set_ylabel("Position (mm)")
-                plt.xticks(rotation=45, ha="right")
-                plt.show()
+                await asyncio.gather(display_coroutine(controller, sampling_rate, xs, ys))
+
         # except KeyboardInterrupt:
         #     interrupted = True
         #     controller.StopPolling()
@@ -126,4 +152,6 @@ async def main():
         # want the controller to move first to user specified position and then 
         # depending on the input of the zurich to move towards or away from the assumed position.
 
+
 asyncio.run(main())
+sys.exit()
