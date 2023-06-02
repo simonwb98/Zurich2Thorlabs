@@ -41,8 +41,18 @@ async def display_coroutine(controller: TCubeDCServo, refresh_rate: float, xs: l
     xs.append(dt.datetime.now().strftime('%H:%M:%S.%f'))
     ys.append(pos)
 
+def handle_interrupt(signum, frame):
+    print("Program interrupted. Disconnecting from controller ...")
+    global interrupted 
+    interrupted = True
+    # raise KeyboardInterrupt
 
-async def main():    
+
+async def main(): 
+    global interrupted
+    interrupted = False
+    signal.signal(signal.SIGINT, handle_interrupt)
+
     serial_num = str('83835052') # use S/N of T Cube controller
     
     DeviceManagerCLI.BuildDeviceList() # load available devices into memory
@@ -83,6 +93,7 @@ async def main():
         print('Moving Motor')
         controller.MoveTo(Decimal(user_position), 0) # immediately continue
         time.sleep(.25)
+        print("Press Ctrl+c to interrupt")
 
         fig, ax = plt.subplots()
         xs = []
@@ -90,17 +101,26 @@ async def main():
         plt.ion()
 
         try:
-            while True:
+            while not interrupted:
                 await asyncio.gather(display_coroutine(controller, .25, xs, ys))
                 ln, = ax.plot(xs, ys)
                 ax.set_xlabel("Time")
                 ax.set_ylabel("Position (mm)")
                 plt.xticks(rotation=45, ha="right")
                 plt.show()
-        except KeyboardInterrupt:
-            controller.StopPolling()
-            controller.Disconnect(False)
-            print("Disconnected")
+        # except KeyboardInterrupt:
+        #     interrupted = True
+        #     controller.StopPolling()
+        #     controller.Disconnect(False)
+        #     print("Disconnected")
+        finally:
+            if interrupted:
+                controller.StopPolling()
+                controller.Disconnect(False)
+                print("Disconnected")
+
+
+
             
         
         # want the controller to move first to user specified position and then 
