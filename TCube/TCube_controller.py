@@ -42,16 +42,13 @@ animation_active = True
 
 async def display_coroutine(controller: TCubeDCServo, sampling_rate: float):
     global interrupted
-    await asyncio.sleep(sampling_rate)
 
-    # initialize plot
+    # initialize plot 
     app = QtWidgets.QApplication(sys.argv)
 
     show_last = 100 #int, number of data points
     xs = np.linspace(-show_last*sampling_rate, -sampling_rate, show_last, endpoint=True)
     ys = np.zeros(show_last)
-    print(xs)
-    print(ys)
 
     win = pg.GraphicsLayoutWidget()
     win.show()
@@ -62,26 +59,31 @@ async def display_coroutine(controller: TCubeDCServo, sampling_rate: float):
     win.addItem(plot_item)
     plot.setData(xs, ys)
 
+    # decoration
+    plot_item.getAxis("bottom").setLabel("Time", units="s")
+    plot_item.getAxis("left").setLabel("Position", units="mm")
+    plot_item.setTitle(f"{controller.GetDeviceInfo().Name} - Real-Time Plot")
+
     while not interrupted:
-        
+        await asyncio.sleep(sampling_rate)
         pos = controller.Position.ToString()
+
         xs = np.append(xs, xs[-1] + sampling_rate)
         xs = xs[1:] # pop off first element
         ys = np.append(ys, float(pos))
         ys = ys[1:]
-        print(ys)
-
+        
         plot.setData(xs, ys)
-        if xs[-1] == 0.:
-            app.exec_()
+        QtCore.QCoreApplication.processEvents()
+    app.exec_()
+            
     
 
 def handle_interrupt(signum, frame):
     print("Program interrupted. Disconnecting from controller ...")
+    print("You can close the plot window now.")
     global interrupted 
     interrupted = True
-    # raise KeyboardInterrupt
-
 
 async def main(): 
     global interrupted
@@ -129,11 +131,11 @@ async def main():
         controller.MoveTo(Decimal(user_position), 0) # immediately continue
         time.sleep(.25)
         print("Press \"Ctrl+c\" to interrupt")
-        sampling_rate = .25 #float, rate in s
+        sampling_rate = .1 #float, rate in s
 
         try:
-            await asyncio.gather(display_coroutine(controller, sampling_rate))
-            
+            display_task = asyncio.create_task(display_coroutine(controller, sampling_rate))
+            await display_task
         # except KeyboardInterrupt:
         #     interrupted = True
         #     controller.StopPolling()
