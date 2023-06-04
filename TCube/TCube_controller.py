@@ -40,19 +40,40 @@ from System import Decimal # Kinesis libraries use Decimal type for move paramet
 user_position = float(input("Please specify position in mm: "))
 animation_active = True
 
-async def display_coroutine(controller: TCubeDCServo, sampling_rate: float, xs: list, ys: list):
-
-    
+async def display_coroutine(controller: TCubeDCServo, sampling_rate: float):
+    global interrupted
     await asyncio.sleep(sampling_rate)
 
-    pos = controller.Position.ToString()
-    np.append(xs, xs[-1] + sampling_rate)
-    xs = xs[1:] # pop off first element
-    np.append(ys, pos)
-    ys = ys[1:]
+    # initialize plot
+    app = QtWidgets.QApplication(sys.argv)
+
+    show_last = 100 #int, number of data points
+    xs = np.linspace(-show_last*sampling_rate, -sampling_rate, show_last, endpoint=True)
+    ys = np.zeros(show_last)
     print(xs)
+    print(ys)
+
+    win = pg.GraphicsLayoutWidget()
+    win.show()
+
+    plot_item = pg.PlotItem()
+    pen = pg.mkPen(color=(255, 0, 0))
+    plot = plot_item.plot(pen=pen)
+    win.addItem(plot_item)
     plot.setData(xs, ys)
-    app.exec_()
+
+    while not interrupted:
+        
+        pos = controller.Position.ToString()
+        xs = np.append(xs, xs[-1] + sampling_rate)
+        xs = xs[1:] # pop off first element
+        ys = np.append(ys, float(pos))
+        ys = ys[1:]
+        print(ys)
+
+        plot.setData(xs, ys)
+        if xs[-1] == 0.:
+            app.exec_()
     
 
 def handle_interrupt(signum, frame):
@@ -108,32 +129,11 @@ async def main():
         controller.MoveTo(Decimal(user_position), 0) # immediately continue
         time.sleep(.25)
         print("Press \"Ctrl+c\" to interrupt")
-
-        # initialize plot
-
-        app = QtWidgets.QApplication(sys.argv)
-
-        show_last = 100 #int, number of data points
         sampling_rate = .25 #float, rate in s
-        xs = np.linspace(-show_last*sampling_rate, 0, show_last, endpoint=True)
-        ys = np.zeros(show_last)
-
-        win = pg.GraphicsLayoutWidget()
-        win.show()
-
-        plot_item = pg.PlotItem()
-        pen = pg.mkPen(color=(255, 0, 0))
-        plot = plot_item.plot(pen=pen)
-        win.addItem(plot_item)
-        plot.setData(xs, ys)
-        
-
-        # update plot
 
         try:
-            while not interrupted:
-                await asyncio.gather(display_coroutine(controller, sampling_rate, xs, ys))
-
+            await asyncio.gather(display_coroutine(controller, sampling_rate))
+            
         # except KeyboardInterrupt:
         #     interrupted = True
         #     controller.StopPolling()
