@@ -14,6 +14,10 @@ by changing the method names appropriately. In particular, another import must b
 import time
 import clr # need to import pythonnet (can be done from pip)
 
+#imports for zurich
+from zhinst import utils as ziutils
+import zhinst.core
+
 # imports for live plotting and asynchronous programming
 import numpy as np
 import datetime as dt
@@ -37,43 +41,73 @@ from Thorlabs.MotionControl.GenericMotorCLI.ControlParameters import JogParamete
 from Thorlabs.MotionControl.TCube.DCServoCLI import *
 from System import Decimal # Kinesis libraries use Decimal type for move parameters and stage settings
 
+# connect to lock-in
+device_id = "dev2142"
+apilevel = 6
+(daq, device, props) = ziutils.create_api_session(device_id, apilevel)
+
 user_position = float(input("Please specify position in mm: "))
 animation_active = True
 
-async def display_coroutine(controller: TCubeDCServo, sampling_rate: float):
+async def display_coroutine(controller: TCubeDCServo, daq: zhinst.core.ziDAQServer, sampling_rate: float):
     global interrupted
 
     # initialize plot 
     app = QtWidgets.QApplication(sys.argv)
-
-    show_last = 100 #int, number of data points
-    xs = np.linspace(-show_last*sampling_rate, -sampling_rate, show_last, endpoint=True)
-    ys = np.zeros(show_last)
-
     win = pg.GraphicsLayoutWidget()
     win.show()
 
-    plot_item = pg.PlotItem()
-    pen = pg.mkPen(color=(255, 0, 0))
-    plot = plot_item.plot(pen=pen)
-    win.addItem(plot_item)
-    plot.setData(xs, ys)
+    show_last = 300 #int, number of data points
+    x = np.linspace(-show_last*sampling_rate, -sampling_rate, show_last, endpoint=True) # time arr
 
-    # decoration
-    plot_item.getAxis("bottom").setLabel("Time", units="s")
-    plot_item.getAxis("left").setLabel("Position", units="mm")
-    plot_item.setTitle(f"{controller.GetDeviceInfo().Name} - Real-Time Plot")
+    # initialize y data for thorlabs and zurich
+    y_tl = np.zeros(show_last)
+    y_zi = np.zeros(show_last)
+
+    # initialize plot windows
+    # thorlabs
+    plot_item1 = pg.PlotItem()
+    pen1 = pg.mkPen(color=(255, 0, 0))
+    plot1 = plot_item1.plot(pen=pen1)
+    win.addItem(plot_item1, row=1, col=1, rowspan=1, colspan=1)
+    plot1.setData(x, y_tl)
+
+    # zurich
+    plot_item2 = pg.PlotItem()
+    pen2 = pg.mkPen(color=(0, 0, 255))
+    plot2 = plot_item2.plot(pen=pen2)
+    win.addItem(plot_item2, row=2, col=1, rowspan=1, colspan=1)
+    plot2.setData(x, y_zi)
+
+    # decoration tl plot window
+    plot_item1.getAxis("bottom").setLabel("Time", units="s")
+    plot_item1.getAxis("left").setLabel("Position", units="mm")
+    plot_item1.setTitle(f"{controller.GetDeviceInfo().Name} Translation stage")
+
+    # decoration zi plot window
+    plot_item2.getAxis("bottom").setLabel("Time", units="s")
+    plot_item2.getAxis("left").setLabel("Demod signal", units="V")
+    plot_item2.setTitle(f"{device} Lock-in")
 
     while not interrupted:
         await asyncio.sleep(sampling_rate)
         pos = controller.Position.ToString()
+        sample = daq.getSample("/%s/demods/0/sample" % device)
+        get_polar(sample)
 
-        xs = np.append(xs, xs[-1] + sampling_rate)
-        xs = xs[1:] # pop off first element
-        ys = np.append(ys, float(pos))
-        ys = ys[1:]
+        # update tl data
+        x = np.append(x, x[-1] + sampling_rate)
+        x = x[1:] # pop off first element
+        y_tl = np.append(y_tl, float(pos))
+        y_tl = y_tl[1:]
+
+        # update zi data
+        y_zi = np.append(y_zi, sample["R"])
+        y_zi = y_zi[1:]
         
-        plot.setData(xs, ys)
+        # update plots with new data
+        plot1.setData(x, y_tl)
+        plot2.setData(x, y_zi)
         QtCore.QCoreApplication.processEvents()
     app.exec_()
             
@@ -84,6 +118,11 @@ def handle_interrupt(signum, frame):
     print("You can close the plot window now.")
     global interrupted 
     interrupted = True
+
+def get_polar(sample):
+    sample["R"] = np.abs(sample["x"] + 1j * sample["y"])
+    sample["theta"] = np.angle(sample["x"] + 1j * sample["y"])
+
 
 async def main(): 
     global interrupted
@@ -134,7 +173,7 @@ async def main():
         sampling_rate = .1 #float, rate in s
 
         try:
-            display_task = asyncio.create_task(display_coroutine(controller, sampling_rate))
+            display_task = asyncio.create_task(display_coroutine(controller, daq, sampling_rate))
             await display_task
         # except KeyboardInterrupt:
         #     interrupted = True
