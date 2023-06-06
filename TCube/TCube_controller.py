@@ -16,7 +16,8 @@ import clr # need to import pythonnet (can be done from pip)
 
 #imports for zurich
 from zhinst import utils as ziutils
-import zhinst.core
+from zhinst import toolkit as zitools
+from zhinst.toolkit import Session
 
 # imports for live plotting and asynchronous programming
 import numpy as np
@@ -43,19 +44,24 @@ from System import Decimal # Kinesis libraries use Decimal type for move paramet
 
 # connect to lock-in
 device_id = "dev2142"
-apilevel = 6
-(daq, device, props) = ziutils.create_api_session(device_id, apilevel)
+# IP address of the host computer where the Data Servers run
+server_host = 'localhost'
+# A session opened to LabOne Data Server
+session = Session(server_host)
+# connect device and pick pid
+lock_in = session.connect_device(device_id).pids[3] 
 
 user_position = float(input("Please specify position in mm: "))
 animation_active = True
 
-async def display_coroutine(controller: TCubeDCServo, daq: zhinst.core.ziDAQServer, sampling_rate: float):
+async def display_coroutine(controller: TCubeDCServo, PID: zitools.nodetree.node.Node, sampling_rate: float):
     global interrupted
 
     # initialize plot 
     app = QtWidgets.QApplication(sys.argv)
     win = pg.GraphicsLayoutWidget()
     win.show()
+    v = win.addViewBox(row=0, col=0)
 
     show_last = 300 #int, number of data points
     x = np.linspace(-show_last*sampling_rate, -sampling_rate, show_last, endpoint=True) # time arr
@@ -69,40 +75,44 @@ async def display_coroutine(controller: TCubeDCServo, daq: zhinst.core.ziDAQServ
     plot_item1 = pg.PlotItem()
     pen1 = pg.mkPen(color=(255, 0, 0))
     plot1 = plot_item1.plot(pen=pen1)
-    win.addItem(plot_item1, row=1, col=1, rowspan=1, colspan=1)
+    p1 = win.addItem(plot_item1, row=1, col=1, rowspan=1, colspan=1)
     plot1.setData(x, y_tl)
 
     # zurich
     plot_item2 = pg.PlotItem()
     pen2 = pg.mkPen(color=(0, 0, 255))
     plot2 = plot_item2.plot(pen=pen2)
-    win.addItem(plot_item2, row=2, col=1, rowspan=1, colspan=1)
+    p2 = win.addItem(plot_item2, row=2, col=1, rowspan=1, colspan=1)
     plot2.setData(x, y_zi)
 
     # decoration tl plot window
     plot_item1.getAxis("bottom").setLabel("Time", units="s")
-    plot_item1.getAxis("left").setLabel("Position", units="mm")
+    plot_item1.getAxis("left").setLabel("Position", units="m")
     plot_item1.setTitle(f"{controller.GetDeviceInfo().Name} Translation stage")
 
     # decoration zi plot window
     plot_item2.getAxis("bottom").setLabel("Time", units="s")
-    plot_item2.getAxis("left").setLabel("Demod signal", units="V")
-    plot_item2.setTitle(f"{device} Lock-in")
+    plot_item2.getAxis("left").setLabel("PID Error", units="V")
+    plot_item2.setTitle(f"{device_id} Lock-in")
 
     while not interrupted:
         await asyncio.sleep(sampling_rate)
-        pos = controller.Position.ToString()
-        sample = daq.getSample("/%s/demods/0/sample" % device)
-        get_polar(sample)
+
+        # gather the new data 
+        pos = controller.Position.ToString() # this is in mm
+        PID.error.subscribe()
+        poll_result = session.poll(recording_time=1e-2) # in s, default is 0.1s
+        PID.error.unsubscribe()
+        pid_error = poll_result[PID.error]["value"][0]
 
         # update tl data
         x = np.append(x, x[-1] + sampling_rate)
         x = x[1:] # pop off first element
-        y_tl = np.append(y_tl, float(pos))
+        y_tl = np.append(y_tl, 1e-3*float(pos)) # conversion is just for pyqtgraph
         y_tl = y_tl[1:]
 
         # update zi data
-        y_zi = np.append(y_zi, sample["R"])
+        y_zi = np.append(y_zi, pid_error)
         y_zi = y_zi[1:]
         
         # update plots with new data
@@ -111,17 +121,43 @@ async def display_coroutine(controller: TCubeDCServo, daq: zhinst.core.ziDAQServ
         QtCore.QCoreApplication.processEvents()
     app.exec_()
             
-    
+
+# async def stage_coroutine(controller: TCubeDCServo, PID: zitools.nodetree.node.Node, sampling_rate: float):
+#     global interrupted
+
+#     prop_const = 5e-3 # units of m/V, change later
+#     threshold = 0.1 # units of V, PID "input" needs to be at least this large
+
+#     while not interrupted:
+#         await asyncio.sleep(sampling_rate)
+
+#         PID.value.subscribe()
+#         poll_result = session.poll(recording_time=1e-2) # in s, default is 0.1s
+#         PID.value.unsubscribe()
+#         pid_value = poll_result[PID.value]["value"][0]
+
+#         if np.abs(pid_value) > threshold:
+#             jog_params = controller.GetJogParams()
+#             jog_params.StepSize = Decimal(prop_const*np.abs(pid_value)) # adjust step size, in mm
+
+#             current_pos = controller.Position.ToString()
+#             if np.abs(pid_value) > np.abs(prev_value):
+                      
+                # change movement direction
+                # move small step proportional to pid_value
+                # save pid value as prev_value
+            # else:
+                # keep movement direction the same
+                # move small step proportional to pid_value
+            
+
+
 
 def handle_interrupt(signum, frame):
     print("Program interrupted. Disconnecting from controller ...")
     print("You can close the plot window now.")
     global interrupted 
     interrupted = True
-
-def get_polar(sample):
-    sample["R"] = np.abs(sample["x"] + 1j * sample["y"])
-    sample["theta"] = np.angle(sample["x"] + 1j * sample["y"])
 
 
 async def main(): 
@@ -162,6 +198,7 @@ async def main():
         jog_params.StepSize = Decimal(1) # units in mm
         jog_params.MaxVelocity = Decimal(2) # units in mm/s
         jog_params.JogMode = JogParametersBase.JogModes.SingleStep
+        print(jog_params.MotorDirection)
         
         # send updated jog params back to the controller
         controller.SetJogParams(jog_params)
@@ -170,17 +207,16 @@ async def main():
         controller.MoveTo(Decimal(user_position), 0) # immediately continue
         time.sleep(.25)
         print("Press \"Ctrl+c\" to interrupt")
-        sampling_rate = .1 #float, rate in s
+        sampling_rate = .1 #float, plot refresh rate in s
+        update_rate = 3 #float, mount update rate in s
 
         try:
-            display_task = asyncio.create_task(display_coroutine(controller, daq, sampling_rate))
+            display_task = asyncio.create_task(display_coroutine(controller, lock_in, sampling_rate))
+            # stage_task = asyncio.create_task(stage_coroutine(controller, lock_in, update_rate))
             await display_task
-        # except KeyboardInterrupt:
-        #     interrupted = True
-        #     controller.StopPolling()
-        #     controller.Disconnect(False)
-        #     print("Disconnected")
-        finally:
+            # await stage_task
+
+        finally: # entered when KeyboardInterruptError is raised 
             if interrupted:
                 controller.StopPolling()
                 controller.Disconnect(False)
