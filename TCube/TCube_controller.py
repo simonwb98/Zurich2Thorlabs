@@ -61,7 +61,6 @@ async def display_coroutine(controller: TCubeDCServo, PID: zitools.nodetree.node
     app = QtWidgets.QApplication(sys.argv)
     win = pg.GraphicsLayoutWidget()
     win.show()
-    v = win.addViewBox(row=0, col=0)
 
     show_last = 300 #int, number of data points
     x = np.linspace(-show_last*sampling_rate, -sampling_rate, show_last, endpoint=True) # time arr
@@ -75,14 +74,14 @@ async def display_coroutine(controller: TCubeDCServo, PID: zitools.nodetree.node
     plot_item1 = pg.PlotItem()
     pen1 = pg.mkPen(color=(255, 0, 0))
     plot1 = plot_item1.plot(pen=pen1)
-    p1 = win.addItem(plot_item1, row=1, col=1, rowspan=1, colspan=1)
+    win.addItem(plot_item1, row=1, col=1, rowspan=1, colspan=1)
     plot1.setData(x, y_tl)
 
     # zurich
     plot_item2 = pg.PlotItem()
     pen2 = pg.mkPen(color=(0, 0, 255))
     plot2 = plot_item2.plot(pen=pen2)
-    p2 = win.addItem(plot_item2, row=2, col=1, rowspan=1, colspan=1)
+    win.addItem(plot_item2, row=2, col=1, rowspan=1, colspan=1)
     plot2.setData(x, y_zi)
 
     # decoration tl plot window
@@ -122,33 +121,50 @@ async def display_coroutine(controller: TCubeDCServo, PID: zitools.nodetree.node
     app.exec_()
             
 
-# async def stage_coroutine(controller: TCubeDCServo, PID: zitools.nodetree.node.Node, sampling_rate: float):
-#     global interrupted
+async def stage_coroutine(controller: TCubeDCServo, PID: zitools.nodetree.node.Node, sampling_rate: float):
+    global interrupted
 
-#     prop_const = 5e-3 # units of m/V, change later
-#     threshold = 0.1 # units of V, PID "input" needs to be at least this large
+    prop_const = 33 # units of mm/V, change later
+    threshold = 300e-6 # units of V, PID "input" needs to be at least this large
+    prev_direction = "Forward" # start correction by going backwards first
 
-#     while not interrupted:
-#         await asyncio.sleep(sampling_rate)
+    PID.value.subscribe()
+    poll_result = session.poll(recording_time=1e-2) # in s, default is 0.1s
+    PID.value.unsubscribe()
+    prev_value = poll_result[PID.value]["value"][0]
 
-#         PID.value.subscribe()
-#         poll_result = session.poll(recording_time=1e-2) # in s, default is 0.1s
-#         PID.value.unsubscribe()
-#         pid_value = poll_result[PID.value]["value"][0]
+    while not interrupted:
+        await asyncio.sleep(sampling_rate)
 
-#         if np.abs(pid_value) > threshold:
-#             jog_params = controller.GetJogParams()
-#             jog_params.StepSize = Decimal(prop_const*np.abs(pid_value)) # adjust step size, in mm
+        PID.value.subscribe()
+        poll_result = session.poll(recording_time=1e-2) # in s, default is 0.1s
+        PID.value.unsubscribe()
+        pid_value = poll_result[PID.value]["value"][0]
 
-#             current_pos = controller.Position.ToString()
-#             if np.abs(pid_value) > np.abs(prev_value):
-                      
-                # change movement direction
-                # move small step proportional to pid_value
+        if np.abs(pid_value) > threshold:
+            jog_params = controller.GetJogParams()
+            # move small step proportional to pid_value
+            jog_params.StepSize = Decimal(prop_const*np.abs(pid_value)) # adjust step size, in mm
+            controller.SetJogParams(jog_params)
+
+            current_pos = controller.Position.ToString()
+            if np.abs(pid_value) > np.abs(prev_value):
                 # save pid value as prev_value
-            # else:
-                # keep movement direction the same
-                # move small step proportional to pid_value
+                prev_value = pid_value
+                # change movement direction
+                if prev_direction == "Forward":
+                    controller.MoveJog(MotorDirection.Backward, 0)
+                    prev_direction = "Backward"
+                else:
+                    controller.MoveJog(MotorDirection.Forward, 0)
+                    prev_direction = "Forward"
+            else:
+                prev_value = pid_value
+                if prev_direction == "Forward":
+                    controller.MoveJog(MotorDirection.Forward, 0)
+                else:
+                    controller.MoveJog(MotorDirection.Backward, 0)
+            await asyncio.sleep(.25) # lets controller status to update
             
 
 
@@ -198,7 +214,6 @@ async def main():
         jog_params.StepSize = Decimal(1) # units in mm
         jog_params.MaxVelocity = Decimal(2) # units in mm/s
         jog_params.JogMode = JogParametersBase.JogModes.SingleStep
-        print(jog_params.MotorDirection)
         
         # send updated jog params back to the controller
         controller.SetJogParams(jog_params)
@@ -212,9 +227,9 @@ async def main():
 
         try:
             display_task = asyncio.create_task(display_coroutine(controller, lock_in, sampling_rate))
-            # stage_task = asyncio.create_task(stage_coroutine(controller, lock_in, update_rate))
+            stage_task = asyncio.create_task(stage_coroutine(controller, lock_in, update_rate))
             await display_task
-            # await stage_task
+            await stage_task
 
         finally: # entered when KeyboardInterruptError is raised 
             if interrupted:
