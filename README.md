@@ -8,14 +8,14 @@ This repository contains python code I've written to read out signals from a Zur
 
 ## Setting up and Troubleshooting
 
-To properly set up this PID loop to the translation stage, the user must give the program a position to which the stage should move. Upon homing, a plot window pops up that refreshes avery 100ms (this can be modified in '''main()''') and updates the user about translation stage position and PID error signal. By default, the program selects the fourth PID controller from the Zurich Lock-in amplifier, with the node tree '''/device_id/pids/3'''. 
+To properly set up this PID loop to the translation stage, the user must give the program a position to which the stage should move. Upon homing, a plot window pops up that refreshes avery 100ms (this can be modified in ```main()```) and updates the user about translation stage position and PID error signal. By default, the program selects the fourth PID controller from the Zurich Lock-in amplifier, with the node tree ```/device_id/pids/3```. 
 
-*Known errors*
-* '''KeyError: '/dev_id/pids/x/value'''': Make sure to have the PID controller enabled in LabOne
+__Known errors__
+* ```KeyError: '/dev_id/pids/x/value'```: Make sure to have the PID controller enabled in LabOne
 
 ## Improvement ideas
 
-To avoid the use of global variables as the '''interrupted''' flag that handles a KeyboardInterruptError to avoid killing the kernel and to appropriately shut down communication with the TCube, a class-based approach might be cleaner. In this case, the global variables could just be defined as attributes of a '''Zurich_2_Thorlabs''' object.
+To avoid the use of global variables as the ```interrupted``` flag that handles a KeyboardInterruptError to avoid killing the kernel and to appropriately shut down communication with the TCube, a class-based approach might be cleaner. In this case, the global variables could just be defined as attributes of a ```Zurich_2_Thorlabs``` object.
 
 ## References
 
